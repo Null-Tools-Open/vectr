@@ -3,7 +3,14 @@ import { VectrError, RollbackManager } from './error'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
-import { execSync, spawn } from 'child_process'
+import { spawn } from 'child_process'
+
+interface ExecutionContext {
+  cwd: string;
+  variables: Map<string, string>;
+  prefix: string;
+  varPrefix: string;
+}
 
 export class VectrRuntime {
 
@@ -58,19 +65,19 @@ export class VectrRuntime {
     return result
   }
 
-  private interpolate(str: string): string {
+  private interpolate(str: string, variables: Map<string, string>): string {
 
     let result = str
 
     result = result.replace(/\$\{([a-zA-Z0-9_\.]+)\}/g, (match, key) => {
-      if (this.variables.has(key)) return this.variables.get(key) as string
+      if (variables.has(key)) return variables.get(key) as string
       if (this.envVars[key] !== undefined) return this.envVars[key]
 
       return match
     })
 
     result = result.replace(/\$([a-zA-Z0-9_\.]+)/g, (match, key) => {
-      if (this.variables.has(key)) return this.variables.get(key) as string
+      if (variables.has(key)) return variables.get(key) as string
       if (this.envVars[key] !== undefined) return this.envVars[key]
 
       return match
@@ -204,6 +211,33 @@ export class VectrRuntime {
     }
   }
 
+  private generateCombinations(matrix?: Map<string, string[]>): Record<string, string>[] {
+
+    if (!matrix || matrix.size === 0) return [{}]
+
+    const keys = Array.from(matrix.keys())
+    const results: Record<string, string>[] = []
+
+    const helper = (idx: number, current: Record<string, string>) => {
+
+      if (idx === keys.length) {
+        results.push({ ...current })
+        return
+      }
+
+      const key = keys[idx]
+      const values = matrix.get(key)!
+
+      for (const val of values) {
+        current[key] = val
+        helper(idx + 1, current)
+      }
+    }
+    helper(0, {})
+
+    return results
+  }
+
   private async executeStep(step: import('./types').Step) {
 
     const name = step.name
@@ -217,37 +251,56 @@ export class VectrRuntime {
       console.log(`\x1b[36m[Vectr]\x1b[0m Running step: \x1b[32m${name}\x1b[0m`)
     }
 
+    const combinations = this.generateCombinations(step.matrix)
     const maxAttempts = (step.retry || 0) + 1
     const delayMs = step.delay || 0
 
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        for (const cmd of step.commands) {
-          await this.executeCommand(cmd, name, showOutput)
-        }
-        break
-      } catch (err: any) {
-        if (attempt === maxAttempts) {
-          if (step.onError) {
+    const executions = combinations.map(async (combo) => {
+      const comboValues = Object.values(combo)
+      const prefix = comboValues.length > 0 ? `[\x1b[35m${comboValues.join(',')}\x1b[0m] ` : ''
+
+      const context: ExecutionContext = {
+        cwd: this.cwd,
+        variables: new Map(this.variables),
+        prefix,
+        varPrefix: step.name + (comboValues.length > 0 ? `_${comboValues.join('_')}` : '')
+      }
+
+      for (const [k, v] of Object.entries(combo)) {
+        context.variables.set(k, v)
+      }
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          for (const cmd of step.commands) {
+            await this.executeCommand(cmd, name, showOutput, context)
+          }
+          break
+        } catch (err: any) {
+          if (attempt === maxAttempts) {
+            if (step.onError) {
+              if (showOutput) {
+                console.log(`\x1b[33m[Vectr] ${context.prefix}Step ${name} failed. Running fallback wrapper...\x1b[0m`)
+              }
+              try {
+                await this.executeCommand(step.onError, name, showOutput, context)
+                break
+              } catch (fallbackErr: any) {
+                throw err
+              }
+            }
+            throw err
+          } else {
             if (showOutput) {
-              console.log(`\x1b[33m[Vectr] Step ${name} failed. Running fallback wrapper...\x1b[0m`)
+              console.log(`\x1b[33m[Vectr] ${context.prefix}Step ${name} failed (Attempt ${attempt}/${maxAttempts}). Retrying in ${delayMs}ms...\x1b[0m`)
             }
-            try {
-              await this.executeCommand(step.onError, name, showOutput)
-              break
-            } catch (fallbackErr: any) {
-              throw err
-            }
+            await new Promise(r => setTimeout(r, delayMs))
           }
-          throw err
-        } else {
-          if (showOutput) {
-            console.log(`\x1b[33m[Vectr] Step ${name} failed (Attempt ${attempt}/${maxAttempts}). Retrying in ${delayMs}ms...\x1b[0m`)
-          }
-          await new Promise(r => setTimeout(r, delayMs))
         }
       }
-    }
+    })
+
+    await Promise.all(executions)
 
     const endTime = Date.now()
     const duration = endTime - startTime
@@ -258,35 +311,35 @@ export class VectrRuntime {
     }
   }
 
-  private async executeCommand(cmd: Command, stepName: string, showOutput: boolean) {
+  private async executeCommand(cmd: Command, stepName: string, showOutput: boolean, ctx: ExecutionContext) {
     switch (cmd.type) {
       case 'cd': {
-        const target = this.resolvePath(this.interpolate(cmd.path))
+        const target = this.resolvePath(this.interpolate(cmd.path, ctx.variables), ctx.cwd)
         if (showOutput) {
-          console.log(`\x1b[90m  ↳ cd ${target}\x1b[0m`)
+          console.log(`\x1b[90m  ${ctx.prefix}↳ cd ${target}\x1b[0m`)
         }
-        this.cwd = target
+        ctx.cwd = target
         break
       }
       case 'var': {
-        const value = this.interpolate(cmd.value)
+        const value = this.interpolate(cmd.value, ctx.variables)
         if (showOutput) {
-          console.log(`\x1b[90m  ↳ var ${cmd.name} = '${this.maskSecrets(value)}'\x1b[0m`)
+          console.log(`\x1b[90m  ${ctx.prefix}↳ var ${cmd.name} = '${this.maskSecrets(value)}'\x1b[0m`)
         }
-        this.variables.set(cmd.name, value)
-        this.variables.set(`${stepName}.${cmd.name}`, value)
+        ctx.variables.set(cmd.name, value)
+        this.variables.set(`${ctx.varPrefix}.${cmd.name}`, value)
         break
       }
       case 'capture': {
-        const commandStr = this.interpolate(cmd.command)
+        const commandStr = this.interpolate(cmd.command, ctx.variables)
         if (showOutput) {
-          console.log(`\x1b[90m  ↳ var ${cmd.name} = capture ${this.maskSecrets(commandStr)}\x1b[0m`)
+          console.log(`\x1b[90m  ${ctx.prefix}↳ var ${cmd.name} = capture ${this.maskSecrets(commandStr)}\x1b[0m`)
         }
         const showCommands = this.debugFlag('showCommands')
 
         await new Promise<void>((resolve, reject) => {
           const child = spawn(commandStr, {
-            cwd: this.cwd,
+            cwd: ctx.cwd,
             env: this.envVars,
             shell: true,
             stdio: ['ignore', 'pipe', 'pipe']
@@ -310,8 +363,8 @@ export class VectrRuntime {
           child.on('close', (code) => {
             if (code === 0) {
               const finalValue = capturedOutput.trim()
-              this.variables.set(cmd.name, finalValue)
-              this.variables.set(`${stepName}.${cmd.name}`, finalValue)
+              ctx.variables.set(cmd.name, finalValue)
+              this.variables.set(`${ctx.varPrefix}.${cmd.name}`, finalValue)
               resolve()
             } else {
               reject(new VectrError(`Command failed: ${this.maskSecrets(commandStr)}`))
@@ -325,11 +378,11 @@ export class VectrRuntime {
         break
       }
       case 'cp': {
-        const src = this.resolvePath(this.interpolate(cmd.src))
-        const dest = this.resolvePath(this.interpolate(cmd.dest))
+        const src = this.resolvePath(this.interpolate(cmd.src, ctx.variables), ctx.cwd)
+        const dest = this.resolvePath(this.interpolate(cmd.dest, ctx.variables), ctx.cwd)
 
         if (showOutput) {
-          console.log(`\x1b[90m  ↳ cp ${src} => ${dest}\x1b[0m`)
+          console.log(`\x1b[90m  ${ctx.prefix}↳ cp ${src} => ${dest}\x1b[0m`)
         }
 
         if (!fs.existsSync(src)) {
@@ -352,16 +405,16 @@ export class VectrRuntime {
         break
       }
       case 'run': {
-        const commandStr = this.interpolate(cmd.command)
+        const commandStr = this.interpolate(cmd.command, ctx.variables)
         if (showOutput) {
-          console.log(`\x1b[90m  ↳ ${this.maskSecrets(commandStr)}\x1b[0m`)
+          console.log(`\x1b[90m  ${ctx.prefix}↳ ${this.maskSecrets(commandStr)}\x1b[0m`)
         }
         const showCommands = this.debugFlag('showCommands')
 
         try {
           await new Promise<void>((resolve, reject) => {
             const child = spawn(commandStr, {
-              cwd: this.cwd,
+              cwd: ctx.cwd,
               env: this.envVars,
               shell: true,
               stdio: ['ignore', 'pipe', 'pipe']
@@ -394,7 +447,7 @@ export class VectrRuntime {
         } catch (err: any) {
           if (cmd.ignoreError) {
             if (showOutput) {
-              console.log(`\x1b[33m[Vectr]\x1b[0m \x1b[90m↳ [Ignored Error] ${err.message}\x1b[0m`)
+              console.log(`\x1b[33m[Vectr]\x1b[0m \x1b[90m${ctx.prefix}↳ [Ignored Error] ${err.message}\x1b[0m`)
             }
           } else {
             throw err
@@ -405,13 +458,13 @@ export class VectrRuntime {
     }
   }
 
-  private resolvePath(p: string): string {
+  private resolvePath(p: string, cwd: string): string {
 
     if (p.startsWith('~/')) {
       p = path.join(process.env.HOME || process.env.USERPROFILE || '', p.slice(2))
     }
 
-    const resolved = path.resolve(this.cwd, p)
+    const resolved = path.resolve(cwd, p)
 
     if (this.config?.enableSafeRuntime?.enabled) {
 

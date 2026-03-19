@@ -13,6 +13,7 @@ export interface Step {
   retry?: number
   delay?: number
   onError?: Command
+  matrix?: Map<string, string[]>
 }
 
 export type Command = CdCommand | VarCommand | CpCommand | RunCommand | CaptureCommand

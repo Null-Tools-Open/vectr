@@ -14,6 +14,7 @@ export function parse(input: string, config?: VectrConfig): Script {
 
   let currentStep: Step | null = null
   let currentBlock: 'none' | 'step' | 'flow' | 'env' | 'secret' = 'none'
+  let inMatrix = false
 
   for (let i = 0; i < lines.length; i++) {
 
@@ -25,17 +26,20 @@ export function parse(input: string, config?: VectrConfig): Script {
     if (line.startsWith('env:')) {
       currentBlock = 'env'
       currentStep = null
+      inMatrix = false
       continue
     }
 
     if (line.startsWith('secret:')) {
       currentBlock = 'secret'
       currentStep = null
+      inMatrix = false
       continue
     }
 
     if (line.startsWith('step ')) {
       currentBlock = 'step'
+      inMatrix = false
       const stepName = line.substring(5, line.length - 1).trim()
       currentStep = { name: stepName, commands: [] }
       script.steps.set(stepName, currentStep)
@@ -45,6 +49,7 @@ export function parse(input: string, config?: VectrConfig): Script {
     if (line.startsWith('flow:')) {
       currentBlock = 'flow'
       currentStep = null
+      inMatrix = false
 
       const rest = line.substring(5).trim()
       if (rest) {
@@ -87,6 +92,32 @@ export function parse(input: string, config?: VectrConfig): Script {
     }
 
     if (currentBlock === 'step' && currentStep) {
+
+      if (line.startsWith('matrix:')) {
+
+        inMatrix = true
+        currentStep.matrix = new Map<string, string[]>()
+
+        continue
+      }
+
+      if (inMatrix) {
+
+        const matrixMatch = line.match(/^([a-zA-Z0-9_]+):\s*\[(.*)\]$/)
+
+        if (matrixMatch) {
+
+          const key = matrixMatch[1]
+          const values = matrixMatch[2].split(',').map(s => s.trim().replace(/^['"](.*)['"]$/, '$1')).filter(Boolean)
+
+          currentStep.matrix!.set(key, values)
+
+          continue
+        } else {
+
+          inMatrix = false
+        }
+      }
       if (line.startsWith('retry ')) {
         const match = line.match(/^retry\s+(\d+)\s+delay\s+(\d+)(s|ms)$/)
         if (match) {
