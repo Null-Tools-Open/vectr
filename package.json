@@ -1,0 +1,22 @@
+{
+  "name": "vectr",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "thximpulse",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "bin": {
+    "vectr": "dist/bin/vectr.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/bin/vectr.ts test.vcr",
+    "test": "node --test dist/tests"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
