@@ -1,7 +1,7 @@
 {
   "name": "vectr",
   "version": "1.0.0",
-  "description": "",
+  "description": "Secure automation runtime designed to replace bash scripts with clean, predictable .vcr files",
   "license": "ISC",
   "author": "thximpulse",
   "type": "commonjs",
