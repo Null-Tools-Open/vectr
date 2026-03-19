@@ -6,6 +6,7 @@
   "author": "thximpulse",
   "type": "commonjs",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "vectr": "dist/bin/vectr.js"
   },
