@@ -1,6 +1,6 @@
 # Vectr 
 
-Secure automation runtime designed to replace messy bash scripts with clean, predictable `.vcr` files. 
+Secure automation runtime designed to replace messy bash scripts with clean, predictable `.vcr` files
 
 Got tired of standard shell scripts failing silently halfway through and leaving a corrupted workspace behind? Vectr parses your entire execution flow upfront, runs heavy I/O asynchronously, and guarantees safety via a native Snapshot Rollback system. When a command fails, Vectr just undoes everything. 
 
@@ -58,7 +58,7 @@ export default {
   },
   
   useWorkers: {
-    enabled: true // Enables async I/O and blazing-fast snapshoting
+    enabled: true // Enables async I/O and snapshoting
   }
 };
 ```

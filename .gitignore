@@ -1,0 +1,6 @@
+/node_modules
+/dist
+test_*
+test.vcr
+vectr.config.mjs
+/packages
