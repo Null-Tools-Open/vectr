@@ -1,4 +1,4 @@
-import { Script, Step, VectrConfig } from './types'
+import { Script, Step, SecretReference, VectrConfig } from './types'
 import { VectrSyntaxError } from './error'
 import { VectrWarning } from './warn'
 
@@ -6,19 +6,23 @@ export function parse(input: string, config?: VectrConfig): Script {
 
   const lines = input.split('\n')
   const script: Script = {
-    env: new Map<string, string>(),
-    secrets: new Map<string, import('./types').SecretRef>(),
     steps: new Map<string, Step>(),
-    flow: []
+    flow: [],
+    env: new Map<string, string>(),
+    secrets: new Map<string, SecretReference>()
   }
 
   let currentStep: Step | null = null
   let currentBlock: 'none' | 'step' | 'flow' | 'env' | 'secret' = 'none'
   let inMatrix = false
+  let currentShadow: string | null = null
+  let shadowIndent = 0
 
   for (let i = 0; i < lines.length; i++) {
 
     const rawLine = lines[i]
+    const indentMatch = rawLine.match(/^\s*/)
+    const indent = indentMatch ? indentMatch[0].length : 0
     const line = rawLine.trim()
 
     if (!line || line.startsWith('#')) continue
@@ -27,6 +31,7 @@ export function parse(input: string, config?: VectrConfig): Script {
       currentBlock = 'env'
       currentStep = null
       inMatrix = false
+      currentShadow = null
       continue
     }
 
@@ -34,12 +39,14 @@ export function parse(input: string, config?: VectrConfig): Script {
       currentBlock = 'secret'
       currentStep = null
       inMatrix = false
+      currentShadow = null
       continue
     }
 
     if (line.startsWith('step ')) {
       currentBlock = 'step'
       inMatrix = false
+      currentShadow = null
       const stepName = line.substring(5, line.length - 1).trim()
       currentStep = { name: stepName, commands: [] }
       script.steps.set(stepName, currentStep)
@@ -50,6 +57,7 @@ export function parse(input: string, config?: VectrConfig): Script {
       currentBlock = 'flow'
       currentStep = null
       inMatrix = false
+      currentShadow = null
 
       const rest = line.substring(5).trim()
       if (rest) {
@@ -93,6 +101,12 @@ export function parse(input: string, config?: VectrConfig): Script {
 
     if (currentBlock === 'step' && currentStep) {
 
+      if (currentShadow && indent <= shadowIndent) {
+        currentShadow = null
+      }
+
+      const targetCommands = currentShadow ? currentStep.shadows!.get(currentShadow)! : currentStep.commands
+
       if (line.startsWith('matrix:')) {
 
         inMatrix = true
@@ -117,6 +131,33 @@ export function parse(input: string, config?: VectrConfig): Script {
 
           inMatrix = false
         }
+      }
+      if (line.startsWith('shadow ')) {
+
+        const shadowMatch = line.match(/^shadow\s+([a-zA-Z0-9_]+):$/)
+
+        if (shadowMatch) {
+
+          currentShadow = shadowMatch[1]
+          shadowIndent = indent
+
+          if (!currentStep.shadows) currentStep.shadows = new Map()
+
+          currentStep.shadows.set(currentShadow, [])
+
+          continue
+        }
+      }
+      if (line.startsWith('dry:')) {
+        let cmdStr = line.substring(4).trim()
+        if (cmdStr.startsWith('run ')) {
+          cmdStr = cmdStr.substring(4).trim().replace(/^['"](.*)['"]$/, '$1')
+        } else if ((cmdStr.startsWith('"') && cmdStr.endsWith('"')) || (cmdStr.startsWith("'") && cmdStr.endsWith("'"))) {
+          cmdStr = cmdStr.substring(1, cmdStr.length - 1)
+        }
+        currentStep.dry = cmdStr
+
+        continue
       }
       if (line.startsWith('retry ')) {
         const match = line.match(/^retry\s+(\d+)\s+delay\s+(\d+)(s|ms)$/)
@@ -144,20 +185,20 @@ export function parse(input: string, config?: VectrConfig): Script {
       }
       if (line.startsWith('cd ')) {
         const path = line.substring(3).trim().replace(/^['"](.*)['"]$/, '$1')
-        currentStep.commands.push({ type: 'cd', path })
+        targetCommands.push({ type: 'cd', path })
       } else if (line.startsWith('var ')) {
         const matchCapture = line.match(/^var\s+([a-zA-Z0-9_]+)\s*=\s*capture\s+(.*)$/)
         if (matchCapture) {
           const name = matchCapture[1]
           const command = matchCapture[2].trim().replace(/^['"](.*)['"]$/, '$1')
-          currentStep.commands.push({ type: 'capture', name, command })
+          targetCommands.push({ type: 'capture', name, command })
           continue
         }
         const match = line.match(/^var\s+([a-zA-Z0-9_]+)\s*=\s*(.*)$/)
         if (match) {
           const name = match[1]
           const value = match[2].trim().replace(/^['"](.*)['"]$/, '$1')
-          currentStep.commands.push({ type: 'var', name, value })
+          targetCommands.push({ type: 'var', name, value })
         } else {
           throw new VectrSyntaxError(`Invalid var syntax at line ${i + 1}: ${rawLine}`)
         }
@@ -166,7 +207,7 @@ export function parse(input: string, config?: VectrConfig): Script {
         if (match) {
           const src = match[1].trim().replace(/^['"](.*)['"]$/, '$1')
           const dest = match[2].trim().replace(/^['"](.*)['"]$/, '$1')
-          currentStep.commands.push({ type: 'cp', src, dest })
+          targetCommands.push({ type: 'cp', src, dest })
         } else {
           throw new VectrSyntaxError(`Invalid cp syntax at line ${i + 1}: ${rawLine}`)
         }
@@ -175,7 +216,7 @@ export function parse(input: string, config?: VectrConfig): Script {
         if (match) {
           const command = match[1]
           const ignoreError = match[2] === 'ignore_error'
-          currentStep.commands.push({ type: 'run', command, ignoreError })
+          targetCommands.push({ type: 'run', command, ignoreError })
         } else {
           throw new VectrSyntaxError(`Invalid run syntax at line ${i + 1}: ${rawLine}`)
         }

@@ -1,10 +1,8 @@
-export type SecretRef = { type: 'env', name: string } | { type: 'file', path: string }
-
 export interface Script {
-  env: Map<string, string>
-  secrets: Map<string, SecretRef>
   steps: Map<string, Step>
   flow: string[]
+  env: Map<string, string>
+  secrets: Map<string, SecretReference>
 }
 
 export interface Step {
@@ -14,9 +12,17 @@ export interface Step {
   delay?: number
   onError?: Command
   matrix?: Map<string, string[]>
+  dry?: string
+  shadows?: Map<string, Command[]>
 }
 
 export type Command = CdCommand | VarCommand | CpCommand | RunCommand | CaptureCommand
+
+export interface SecretReference {
+  type: 'env' | 'file'
+  name?: string
+  path?: string
+}
 
 export interface CdCommand {
   type: 'cd'
@@ -49,6 +55,7 @@ export interface CaptureCommand {
 
 export interface VectrConfig {
 
+  dryRun?: boolean
   showWarnings?: boolean
 
   showDebug?: {

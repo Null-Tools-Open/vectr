@@ -35,11 +35,13 @@ export class VectrRuntime {
     }
 
     for (const [key, ref] of this.script.secrets.entries()) {
+
       let val = ''
+
       if (ref.type === 'env') {
-        val = process.env[ref.name] || ''
+        val = process.env[ref.name!] || ''
       } else if (ref.type === 'file') {
-        const p = path.resolve(this.cwd, ref.path)
+        const p = path.resolve(this.cwd, ref.path!)
         if (fs.existsSync(p)) {
           val = fs.readFileSync(p, 'utf-8').trim()
         } else {
@@ -272,9 +274,50 @@ export class VectrRuntime {
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-          for (const cmd of step.commands) {
-            await this.executeCommand(cmd, name, showOutput, context)
+          if (this.config?.dryRun) {
+            if (step.dry) {
+              if (showOutput) {
+                console.log(`\x1b[35m[Vectr] ${context.prefix}↳ [DRY] ${this.interpolate(step.dry, context.variables)}\x1b[0m`)
+              }
+              await this.executeCommand({ type: 'run', command: step.dry }, name, showOutput, context)
+            } else {
+              if (showOutput) {
+                console.log(`\x1b[35m[Vectr] ${context.prefix}Skipped step ${name} (dry-run)...\x1b[0m`)
+              }
+            }
+            break
           }
+
+          const executionPromises: Promise<any>[] = []
+
+          executionPromises.push((async () => {
+            for (const cmd of step.commands) {
+              await this.executeCommand(cmd, name, showOutput, context)
+            }
+          })())
+
+          if (step.shadows) {
+            for (const [shadowName, targetCommands] of step.shadows.entries()) {
+              const shadowContext: ExecutionContext = {
+                ...context,
+                prefix: `${context.prefix}[\x1b[36mshadow:${shadowName}\x1b[0m] `,
+                variables: new Map(context.variables)
+              }
+              executionPromises.push((async () => {
+                try {
+                  for (const cmd of targetCommands) {
+                    await this.executeCommand(cmd, name, showOutput, shadowContext)
+                  }
+                } catch (e: any) {
+                  if (showOutput) {
+                    console.log(`\x1b[31m[Vectr] Shadow ${shadowName} failed: ${e.message}\x1b[0m`)
+                  }
+                }
+              })())
+            }
+          }
+
+          await Promise.all(executionPromises)
           break
         } catch (err: any) {
           if (attempt === maxAttempts) {

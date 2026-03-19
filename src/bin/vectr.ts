@@ -9,13 +9,15 @@ import { pathToFileURL } from 'url'
 (async () => {
 
   const args = process.argv.slice(2)
+  const isDryRun = args.includes('--dry-run') || args.includes('--dry')
+  const scriptArg = args.find(a => !a.startsWith('--'))
 
-  if (args.length === 0) {
-    console.error("Usage: vectr <script.vcr>")
+  if (!scriptArg) {
+    console.error("Usage: vectr [--dry-run] <script.vcr>")
     process.exit(1)
   }
 
-  const scriptPath = path.resolve(process.cwd(), args[0])
+  const scriptPath = path.resolve(process.cwd(), scriptArg)
 
   if (!fs.existsSync(scriptPath)) {
     console.error(`Error: Script file not found: ${scriptPath}`)
@@ -35,6 +37,8 @@ import { pathToFileURL } from 'url'
       console.warn(`\x1b[33m[Vectr]\x1b[0m Failed to load config: ${err.message}`)
     }
   }
+
+  if (isDryRun) config.dryRun = true
 
   try {
 
