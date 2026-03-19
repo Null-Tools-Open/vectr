@@ -1,4 +1,8 @@
+export type SecretRef = { type: 'env', name: string } | { type: 'file', path: string }
+
 export interface Script {
+  env: Map<string, string>
+  secrets: Map<string, SecretRef>
   steps: Map<string, Step>
   flow: string[]
 }
@@ -6,9 +10,12 @@ export interface Script {
 export interface Step {
   name: string
   commands: Command[]
+  retry?: number
+  delay?: number
+  onError?: Command
 }
 
-export type Command = CdCommand | VarCommand | CpCommand | RunCommand
+export type Command = CdCommand | VarCommand | CpCommand | RunCommand | CaptureCommand
 
 export interface CdCommand {
   type: 'cd'
@@ -27,10 +34,15 @@ export interface CpCommand {
   dest: string
 }
 
-
-
 export interface RunCommand {
   type: 'run'
+  command: string
+  ignoreError?: boolean
+}
+
+export interface CaptureCommand {
+  type: 'capture'
+  name: string
   command: string
 }
 
