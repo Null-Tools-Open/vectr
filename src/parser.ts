@@ -220,12 +220,34 @@ export function parse(input: string, config?: VectrConfig): Script {
         } else {
           throw new VectrSyntaxError(`Invalid run syntax at line ${i + 1}: ${rawLine}`)
         }
-      } else if (line.startsWith('print ')) {
-        const match = line.match(/^print\s+['"](.*?)['"]$/)
+      } else if (line.startsWith('print ') || line.startsWith('print.')) {
+        const match = line.match(/^print(?:\.(warn|ok|err))?\s+['"](.*?)['"]$/)
         if (match) {
-          targetCommands.push({ type: 'print', message: match[1] })
+          const style = match[1] as 'warn' | 'ok' | 'err' | undefined
+          targetCommands.push({ type: 'print', style, message: match[2] })
         } else {
           throw new VectrSyntaxError(`Invalid print syntax at line ${i + 1}: ${rawLine}`)
+        }
+      } else if (line.startsWith('rm ')) {
+        const match = line.match(/^rm\s+['"](.*?)['"](?:\s+(if\s+exists))?$/)
+        if (match) {
+          targetCommands.push({ type: 'rm', path: match[1], ifExists: !!match[2] })
+        } else {
+          throw new VectrSyntaxError(`Invalid rm syntax at line ${i + 1}: ${rawLine}`)
+        }
+      } else if (line.startsWith('mv ')) {
+        const match = line.match(/^mv\s+['"](.*?)['"]\s*=>\s*['"](.*?)['"]$/)
+        if (match) {
+          targetCommands.push({ type: 'mv', src: match[1], dest: match[2] })
+        } else {
+          throw new VectrSyntaxError(`Invalid mv syntax at line ${i + 1}: ${rawLine}`)
+        }
+      } else if (line.startsWith('chmod ')) {
+        const match = line.match(/^chmod\s+['"](.*?)['"]\s+(.+)$/)
+        if (match) {
+          targetCommands.push({ type: 'chmod', path: match[1], mode: match[2] })
+        } else {
+          throw new VectrSyntaxError(`Invalid chmod syntax at line ${i + 1}: ${rawLine}`)
         }
       } else if (line.startsWith('leave ')) {
 
@@ -275,6 +297,27 @@ export function parse(input: string, config?: VectrConfig): Script {
             const src = matchCp[1].trim().replace(/^['"](.*)['"]$/, '$1')
             const dest = matchCp[2].trim().replace(/^['"](.*)['"]$/, '$1')
             innerCmd = { type: 'cp', src, dest }
+          }
+        } else if (restLine.startsWith('rm ')) {
+          const matchRm = restLine.match(/^rm\s+['"](.*?)['"](?:\s+(if\s+exists))?$/)
+          if (matchRm) {
+            innerCmd = { type: 'rm', path: matchRm[1], ifExists: !!matchRm[2] }
+          }
+        } else if (restLine.startsWith('mv ')) {
+          const matchMv = restLine.match(/^mv\s+['"](.*?)['"]\s*=>\s*['"](.*?)['"]$/)
+          if (matchMv) {
+            innerCmd = { type: 'mv', src: matchMv[1], dest: matchMv[2] }
+          }
+        } else if (restLine.startsWith('chmod ')) {
+          const matchChmod = restLine.match(/^chmod\s+['"](.*?)['"]\s+(.+)$/)
+          if (matchChmod) {
+            innerCmd = { type: 'chmod', path: matchChmod[1], mode: matchChmod[2] }
+          }
+        } else if (restLine.startsWith('print ') || restLine.startsWith('print.')) {
+          const matchPrint = restLine.match(/^print(?:\.(warn|ok|err))?\s+['"](.*?)['"]$/)
+          if (matchPrint) {
+            const style = matchPrint[1] as 'warn' | 'ok' | 'err' | undefined
+            innerCmd = { type: 'print', style, message: matchPrint[2] }
           }
         }
 

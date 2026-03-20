@@ -73,6 +73,63 @@ export class StepBuilder {
   }
 
   /**
+   * Prints a yellow warning message cleanly to the execution console
+   * @param message The message to print
+  */
+  warn(message: string): this {
+    this.step.commands.push({ type: 'print', style: 'warn', message })
+    return this
+  }
+
+  /**
+   * Prints a green success message cleanly to the execution console
+   * @param message The message to print
+  */
+  ok(message: string): this {
+    this.step.commands.push({ type: 'print', style: 'ok', message })
+    return this
+  }
+
+  /**
+   * Prints a red error message cleanly to the execution console
+   * @param message The message to print
+  */
+  err(message: string): this {
+    this.step.commands.push({ type: 'print', style: 'err', message })
+    return this
+  }
+
+  /**
+   * Removes paths natively supporting wildcards/globs
+   * @param path The path or glob to remove
+   * @param ifExists If true, suppresses errors when the path doesn't exist
+  */
+  rm(path: string, ifExists?: boolean): this {
+    this.step.commands.push({ type: 'rm', path, ifExists })
+    return this
+  }
+
+  /**
+   * Moves or renames a file/directory natively
+   * @param src Source path
+   * @param dest Destination path
+  */
+  mv(src: string, dest: string): this {
+    this.step.commands.push({ type: 'mv', src, dest })
+    return this
+  }
+
+  /**
+   * Changes permissions of a file. Supports globs
+   * @param path Path or glob to chmod
+   * @param mode Permission mode or numerical identifier (e.g. `+x` or `0755`)
+  */
+  chmod(path: string, mode: string): this {
+    this.step.commands.push({ type: 'chmod', path, mode })
+    return this
+  }
+
+  /**
    * Intentionally bypasses the SafeRuntime protections for specific commands
    * Useful for performing global installations (e.g. `npm install -g`), or writes targeting `/tmp`
    * @param commands The commands to execute outside the sandbox

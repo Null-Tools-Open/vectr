@@ -4,6 +4,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { spawn } from 'child_process'
+import fg from 'fast-glob'
 
 interface ExecutionContext {
   cwd: string;
@@ -391,7 +392,12 @@ export class VectrRuntime {
         const msg = this.interpolate(cmd.message, ctx.variables)
 
         if (showOutput) {
-          console.log(`\x1b[36m[Vectr]\x1b[0m ${ctx.prefix}${msg}`)
+          let color = '\x1b[36m'
+          if (cmd.style === 'warn') color = '\x1b[33m'
+          else if (cmd.style === 'ok') color = '\x1b[32m'
+          else if (cmd.style === 'err') color = '\x1b[31m'
+
+          console.log(`${color}[Vectr]\x1b[0m ${ctx.prefix}${msg}`)
         }
         break
       }
@@ -518,6 +524,81 @@ export class VectrRuntime {
           await fs.promises.cp(src, dest, { recursive: true })
         } else {
           fs.cpSync(src, dest, { recursive: true })
+        }
+        break
+      }
+      case 'rm': {
+
+        const p = this.interpolate(cmd.path, ctx.variables)
+        const globs = p.includes('*') ? await fg(p, { cwd: ctx.cwd, dot: true, absolute: true }) : [this.resolvePath(p, ctx)]
+
+        if (showOutput) {
+          console.log(`\x1b[90m  ${ctx.prefix}↳ rm ${p}${cmd.ifExists ? ' (if exists)' : ''}\x1b[0m`)
+        }
+
+        for (const target of globs) {
+          const resolved = this.resolvePath(target, ctx)
+          if (!fs.existsSync(resolved)) {
+            if (!cmd.ifExists) throw new VectrError(`Path does not exist to remove: ${resolved}`)
+            continue
+          }
+
+          if (this.config?.useWorkers?.enabled) {
+            await fs.promises.rm(resolved, { recursive: true, force: true })
+          } else {
+            fs.rmSync(resolved, { recursive: true, force: true })
+          }
+        }
+        break
+      }
+      case 'mv': {
+        const src = this.resolvePath(this.interpolate(cmd.src, ctx.variables), ctx)
+        const dest = this.resolvePath(this.interpolate(cmd.dest, ctx.variables), ctx)
+
+        if (showOutput) {
+          console.log(`\x1b[90m  ${ctx.prefix}↳ mv ${src} => ${dest}\x1b[0m`)
+        }
+
+        if (!fs.existsSync(src)) {
+          throw new VectrError(`Source path does not exist to move: ${src}`)
+        }
+
+        this.rollbackManager.add(() => {
+          if (fs.existsSync(dest)) fs.renameSync(dest, src)
+        })
+
+        if (this.config?.useWorkers?.enabled) {
+          await fs.promises.rename(src, dest)
+        } else {
+          fs.renameSync(src, dest)
+        }
+        break
+      }
+      case 'chmod': {
+        const p = this.interpolate(cmd.path, ctx.variables)
+        const mode = this.interpolate(cmd.mode, ctx.variables)
+
+        const globs = p.includes('*') ? await fg(p, { cwd: ctx.cwd, dot: true, absolute: true }) : [this.resolvePath(p, ctx)]
+
+        if (showOutput) {
+          console.log(`\x1b[90m  ${ctx.prefix}↳ chmod ${p} ${mode}\x1b[0m`)
+        }
+
+        for (const target of globs) {
+          const resolved = this.resolvePath(target, ctx)
+          if (!fs.existsSync(resolved)) {
+            throw new VectrError(`Path does not exist to chmod: ${resolved}`)
+          }
+
+          if (/^[0-7]{3,4}$/.test(mode)) {
+            const numMode = parseInt(mode, 8)
+            fs.chmodSync(resolved, numMode)
+          } else {
+            await new Promise<void>((resolve, reject) => {
+              const child = spawn(`chmod ${mode} "${resolved}"`, { shell: true })
+              child.on('close', code => code === 0 ? resolve() : reject(new VectrError(`chmod ${mode} failed on ${resolved}`)))
+            })
+          }
         }
         break
       }

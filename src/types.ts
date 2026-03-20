@@ -19,6 +19,25 @@ export interface Step {
 export interface PrintCommand {
   type: 'print'
   message: string
+  style?: 'warn' | 'ok' | 'err'
+}
+
+export interface RmCommand {
+  type: 'rm'
+  path: string
+  ifExists?: boolean
+}
+
+export interface MvCommand {
+  type: 'mv'
+  src: string
+  dest: string
+}
+
+export interface ChmodCommand {
+  type: 'chmod'
+  path: string
+  mode: string
 }
 
 // shit is kinda meaningless right now, but this will execute your instruction stack outside 
@@ -34,7 +53,7 @@ export interface Leave {
   commands: Command[]
 }
 
-export type Command = CdCommand | VarCommand | CpCommand | RunCommand | CaptureCommand | PrintCommand | Leave
+export type Command = CdCommand | VarCommand | CpCommand | RmCommand | MvCommand | ChmodCommand | RunCommand | CaptureCommand | PrintCommand | Leave
 
 export interface SecretReference {
   type: 'env' | 'file'

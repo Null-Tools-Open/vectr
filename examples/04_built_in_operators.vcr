@@ -1,0 +1,18 @@
+step operator_test:
+
+  print.warn "Testing native file operators!"
+  
+  run "mkdir -p ./tmp/example_dir"
+  run "echo 'Hello World' > ./tmp/example_dir/test.txt"
+
+  chmod "./tmp/example_dir/test.txt" +x
+  
+  mv "./tmp/example_dir" => "./tmp/example_dir_moved"
+
+  rm "./tmp/example_dir_moved/**" if exists
+  rm "./tmp/example_dir_moved"
+
+  print.ok "Files cleaned up cleanly using native workers!"
+
+flow:
+  operator_test
