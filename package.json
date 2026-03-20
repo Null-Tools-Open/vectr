@@ -1,5 +1,5 @@
 {
-  "name": "@thximpulse/vectr",
+  "name": "@impulsedev/vectr",
   "version": "1.0.0",
   "description": "Secure automation runtime designed to replace bash scripts with clean, predictable .vcr files",
   "homepage": "https://github.com/Null-Tools-Open/vectr#readme",
