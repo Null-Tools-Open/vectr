@@ -1,6 +1,7 @@
 export * from './types'
 export * from './parser'
 export * from './runtime'
+export * from './builder'
 export * from './warn'
 
 import { parse } from './parser'

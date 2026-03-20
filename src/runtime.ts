@@ -85,7 +85,12 @@ export class VectrRuntime {
       const key = braced || bare
 
       if (variables.has(key)) return variables.get(key) as string
-      if (this.envVars[key] !== undefined) return this.envVars[key]
+      if (this.script.env.has(key)) return this.script.env.get(key) as string
+      if (this.script.secrets.has(key)) return this.envVars[key]
+
+      if (process.env[key] !== undefined) {
+        throw new VectrError(`Environment variable '${key}' was accessed implicitly`)
+      }
 
       return match
     })
@@ -223,7 +228,13 @@ export class VectrRuntime {
         }
       }
 
-      throw error
+      if (error.name === 'VectrError' || error.name === 'VectrSyntaxError') {
+        console.error(`\n\x1b[41m\x1b[30m [Vectr] RUNTIME PANIC \x1b[0m`)
+        console.error(`\x1b[31m${error.message}\x1b[0m\n`)
+        process.exit(1)
+      } else {
+        throw error
+      }
     }
   }
 

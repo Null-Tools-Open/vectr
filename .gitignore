@@ -4,3 +4,4 @@ test_*
 test.vcr
 vectr.config.mjs
 /packages
+devtests
