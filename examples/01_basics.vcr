@@ -1,0 +1,11 @@
+step install_deps:
+  run "echo 'Installing Dependencies...'"
+  var installed = "true"
+
+step build_app:
+  cd "./dist"
+  run "echo 'Building web application...'" ignore_error
+  run "echo 'Done building. Installed=${install_deps.installed}'"
+
+flow:
+  install_deps => build_app

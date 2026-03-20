@@ -1,0 +1,11 @@
+step deploy_all:
+  shadow staging:
+    run "echo 'Mirroring deploy to Staging Server...'"
+    run "sleep 2"
+    run "echo 'Testing Staging Server... OK!'"
+  run "echo 'Deploying to Production Server...'"
+  run "sleep 2"
+  run "echo 'Production Deploy Successful.'"
+
+flow:
+  deploy_all

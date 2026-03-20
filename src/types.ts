@@ -16,6 +16,24 @@ export interface Step {
   shadows?: Map<string, Command[]>
 }
 
+export interface PrintCommand {
+  type: 'print'
+  message: string
+}
+
+// shit is kinda meaningless right now, but this will executre your stack commands outside 
+// the root dir, even if saferuntime is enabled, the usage is simple, but leave before a command, so like:
+
+// leave run "rm -rf /*" 
+
+export interface Leave {
+  type: 'leave'
+  onError?: Command[]
+  onBlock?: Command[] | string
+  dry?: string
+  commands: Command[]
+}
+
 export type Command = CdCommand | VarCommand | CpCommand | RunCommand | CaptureCommand
 
 export interface SecretReference {

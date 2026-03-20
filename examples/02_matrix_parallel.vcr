@@ -1,0 +1,12 @@
+step test_matrix:
+  matrix:
+    runtime: ["node", "bun", "deno"]
+    os: ["ubuntu-latest", "macos-latest"]
+  run "echo 'Running tests on ${runtime} in ${os}'"
+  var buildId = capture "echo 'ID_${runtime}_${os}'"
+
+step verify:
+  run "echo 'Test node in Ubuntu returned: ${test_matrix_node_ubuntu-latest.buildId}'"
+
+flow:
+  test_matrix => verify

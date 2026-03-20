@@ -19,6 +19,7 @@ export class VectrRuntime {
   private rollbackManager: RollbackManager
   private envVars: Record<string, string> = {}
   private secretValues: string[] = []
+  private secretMaskRegex: RegExp | null = null
 
   constructor(private script: Script, private config: VectrConfig = {}) {
 
@@ -41,7 +42,7 @@ export class VectrRuntime {
       if (ref.type === 'env') {
         val = process.env[ref.name!] || ''
       } else if (ref.type === 'file') {
-        const p = path.resolve(this.cwd, ref.path!)
+        const p = this.resolvePath(ref.path!, this.cwd)
         if (fs.existsSync(p)) {
           val = fs.readFileSync(p, 'utf-8').trim()
         } else {
@@ -51,41 +52,36 @@ export class VectrRuntime {
       this.envVars[key] = val
       if (val) this.secretValues.push(val)
     }
+
+    if (this.secretValues.length > 0) {
+
+      const escaped = this.secretValues
+        .filter(s => s.trim())
+        .map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+
+      if (escaped.length > 0) {
+
+        this.secretMaskRegex = new RegExp(escaped.join('|'), 'g')
+      }
+    }
   }
 
   private maskSecrets(text: string): string {
-
-    let result = text
-
-    for (const secret of this.secretValues) {
-
-      if (!secret.trim()) continue
-
-      result = result.split(secret).join('***')
-    }
-
-    return result
+    if (!this.secretMaskRegex) return text
+    return text.replace(this.secretMaskRegex, '***')
   }
 
   private interpolate(str: string, variables: Map<string, string>): string {
 
-    let result = str
+    return str.replace(/\$(?:\{([a-zA-Z0-9_\.-]+)\}|([a-zA-Z0-9_\.-]+))/g, (match, braced, bare) => {
 
-    result = result.replace(/\$\{([a-zA-Z0-9_\.]+)\}/g, (match, key) => {
+      const key = braced || bare
+
       if (variables.has(key)) return variables.get(key) as string
       if (this.envVars[key] !== undefined) return this.envVars[key]
 
       return match
     })
-
-    result = result.replace(/\$([a-zA-Z0-9_\.]+)/g, (match, key) => {
-      if (variables.has(key)) return variables.get(key) as string
-      if (this.envVars[key] !== undefined) return this.envVars[key]
-
-      return match
-    })
-
-    return result
   }
 
   private debugFlag(name: keyof NonNullable<NonNullable<VectrConfig['showDebug']>['extra']>): boolean {
@@ -257,93 +253,99 @@ export class VectrRuntime {
     const maxAttempts = (step.retry || 0) + 1
     const delayMs = step.delay || 0
 
-    const executions = combinations.map(async (combo) => {
-      const comboValues = Object.values(combo)
-      const prefix = comboValues.length > 0 ? `[\x1b[35m${comboValues.join(',')}\x1b[0m] ` : ''
+    const CONCURRENCY_LIMIT = 10
 
-      const context: ExecutionContext = {
-        cwd: this.cwd,
-        variables: new Map(this.variables),
-        prefix,
-        varPrefix: step.name + (comboValues.length > 0 ? `_${comboValues.join('_')}` : '')
-      }
+    for (let i = 0; i < combinations.length; i += CONCURRENCY_LIMIT) {
+      const chunk = combinations.slice(i, i + CONCURRENCY_LIMIT)
 
-      for (const [k, v] of Object.entries(combo)) {
-        context.variables.set(k, v)
-      }
+      const executions = chunk.map(async (combo) => {
+        const comboValues = Object.values(combo)
+        const prefix = comboValues.length > 0 ? `[\x1b[35m${comboValues.join(',')}\x1b[0m] ` : ''
 
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          if (this.config?.dryRun) {
-            if (step.dry) {
-              if (showOutput) {
-                console.log(`\x1b[35m[Vectr] ${context.prefix}↳ [DRY] ${this.interpolate(step.dry, context.variables)}\x1b[0m`)
+        const context: ExecutionContext = {
+          cwd: this.cwd,
+          variables: new Map(this.variables),
+          prefix,
+          varPrefix: step.name + (comboValues.length > 0 ? `_${comboValues.join('_')}` : '')
+        }
+
+        for (const [k, v] of Object.entries(combo)) {
+          context.variables.set(k, v)
+        }
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+          try {
+            if (this.config?.dryRun) {
+              if (step.dry) {
+                if (showOutput) {
+                  console.log(`\x1b[35m[Vectr] ${context.prefix}↳ [DRY] ${this.interpolate(step.dry, context.variables)}\x1b[0m`)
+                }
+                await this.executeCommand({ type: 'run', command: step.dry }, name, showOutput, context)
+              } else {
+                if (showOutput) {
+                  console.log(`\x1b[35m[Vectr] ${context.prefix}Skipped step ${name} (dry-run)...\x1b[0m`)
+                }
               }
-              await this.executeCommand({ type: 'run', command: step.dry }, name, showOutput, context)
+              break
+            }
+
+            const executionPromises: Promise<any>[] = []
+
+            executionPromises.push((async () => {
+              for (const cmd of step.commands) {
+                await this.executeCommand(cmd, name, showOutput, context)
+              }
+            })())
+
+            if (step.shadows) {
+              for (const [shadowName, targetCommands] of step.shadows.entries()) {
+                const shadowContext: ExecutionContext = {
+                  ...context,
+                  prefix: `${context.prefix}[\x1b[36mshadow:${shadowName}\x1b[0m] `,
+                  variables: new Map(context.variables)
+                }
+                executionPromises.push((async () => {
+                  try {
+                    for (const cmd of targetCommands) {
+                      await this.executeCommand(cmd, name, showOutput, shadowContext)
+                    }
+                  } catch (e: any) {
+                    if (showOutput) {
+                      console.log(`\x1b[31m[Vectr] Shadow ${shadowName} failed: ${e.message}\x1b[0m`)
+                    }
+                  }
+                })())
+              }
+            }
+
+            await Promise.all(executionPromises)
+            break
+          } catch (err: any) {
+            if (attempt === maxAttempts) {
+              if (step.onError) {
+                if (showOutput) {
+                  console.log(`\x1b[33m[Vectr] ${context.prefix}Step ${name} failed. Running fallback wrapper...\x1b[0m`)
+                }
+                try {
+                  await this.executeCommand(step.onError, name, showOutput, context)
+                  break
+                } catch (fallbackErr: any) {
+                  throw err
+                }
+              }
+              throw err
             } else {
               if (showOutput) {
-                console.log(`\x1b[35m[Vectr] ${context.prefix}Skipped step ${name} (dry-run)...\x1b[0m`)
+                console.log(`\x1b[33m[Vectr] ${context.prefix}Step ${name} failed (Attempt ${attempt}/${maxAttempts}). Retrying in ${delayMs}ms...\x1b[0m`)
               }
+              await new Promise(r => setTimeout(r, delayMs))
             }
-            break
-          }
-
-          const executionPromises: Promise<any>[] = []
-
-          executionPromises.push((async () => {
-            for (const cmd of step.commands) {
-              await this.executeCommand(cmd, name, showOutput, context)
-            }
-          })())
-
-          if (step.shadows) {
-            for (const [shadowName, targetCommands] of step.shadows.entries()) {
-              const shadowContext: ExecutionContext = {
-                ...context,
-                prefix: `${context.prefix}[\x1b[36mshadow:${shadowName}\x1b[0m] `,
-                variables: new Map(context.variables)
-              }
-              executionPromises.push((async () => {
-                try {
-                  for (const cmd of targetCommands) {
-                    await this.executeCommand(cmd, name, showOutput, shadowContext)
-                  }
-                } catch (e: any) {
-                  if (showOutput) {
-                    console.log(`\x1b[31m[Vectr] Shadow ${shadowName} failed: ${e.message}\x1b[0m`)
-                  }
-                }
-              })())
-            }
-          }
-
-          await Promise.all(executionPromises)
-          break
-        } catch (err: any) {
-          if (attempt === maxAttempts) {
-            if (step.onError) {
-              if (showOutput) {
-                console.log(`\x1b[33m[Vectr] ${context.prefix}Step ${name} failed. Running fallback wrapper...\x1b[0m`)
-              }
-              try {
-                await this.executeCommand(step.onError, name, showOutput, context)
-                break
-              } catch (fallbackErr: any) {
-                throw err
-              }
-            }
-            throw err
-          } else {
-            if (showOutput) {
-              console.log(`\x1b[33m[Vectr] ${context.prefix}Step ${name} failed (Attempt ${attempt}/${maxAttempts}). Retrying in ${delayMs}ms...\x1b[0m`)
-            }
-            await new Promise(r => setTimeout(r, delayMs))
           }
         }
-      }
-    })
+      })
 
-    await Promise.all(executions)
+      await Promise.all(executions)
+    }
 
     const endTime = Date.now()
     const duration = endTime - startTime
@@ -388,10 +390,10 @@ export class VectrRuntime {
             stdio: ['ignore', 'pipe', 'pipe']
           })
 
-          let capturedOutput = ''
+          const outputChunks: Buffer[] = []
 
-          child.stdout.on('data', (data) => {
-            capturedOutput += data.toString()
+          child.stdout.on('data', (data: Buffer) => {
+            outputChunks.push(data)
             if (showCommands) {
               process.stdout.write(this.maskSecrets(data.toString()))
             }
@@ -404,8 +406,9 @@ export class VectrRuntime {
           })
 
           child.on('close', (code) => {
+
             if (code === 0) {
-              const finalValue = capturedOutput.trim()
+              const finalValue = Buffer.concat(outputChunks).toString().trim()
               ctx.variables.set(cmd.name, finalValue)
               this.variables.set(`${ctx.varPrefix}.${cmd.name}`, finalValue)
               resolve()
