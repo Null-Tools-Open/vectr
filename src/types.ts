@@ -21,8 +21,8 @@ export interface PrintCommand {
   message: string
 }
 
-// shit is kinda meaningless right now, but this will executre your stack commands outside 
-// the root dir, even if saferuntime is enabled, the usage is simple, but leave before a command, so like:
+// shit is kinda meaningless right now, but this will execute your instruction stack outside 
+// the root dir, even if saferuntime is enabled, the usage is simple, put leave before a instruction, so like:
 
 // leave run "rm -rf /*" 
 
@@ -34,7 +34,7 @@ export interface Leave {
   commands: Command[]
 }
 
-export type Command = CdCommand | VarCommand | CpCommand | RunCommand | CaptureCommand
+export type Command = CdCommand | VarCommand | CpCommand | RunCommand | CaptureCommand | PrintCommand | Leave
 
 export interface SecretReference {
   type: 'env' | 'file'
@@ -74,6 +74,7 @@ export interface CaptureCommand {
 export interface VectrConfig {
 
   dryRun?: boolean
+  disableLeaveSafeguard?: boolean
   showWarnings?: boolean
 
   showDebug?: {

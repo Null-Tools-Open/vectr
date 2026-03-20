@@ -10,6 +10,7 @@ interface ExecutionContext {
   variables: Map<string, string>;
   prefix: string;
   varPrefix: string;
+  ignoreSafeRuntime?: boolean;
 }
 
 export class VectrRuntime {
@@ -24,6 +25,11 @@ export class VectrRuntime {
   constructor(private script: Script, private config: VectrConfig = {}) {
 
     this.rollbackManager = new RollbackManager(this.config?.enableSafeRuntime?.extras?.showLogs ?? true)
+
+    if (this.config?.disableLeaveSafeguard) {
+      console.warn('\x1b[33m[Vectr Warning] \x1b[1mLeave safeguards are disabled!\x1b[0m \x1b[33mCommands bypassing SafeRuntime will run without restrictions.\x1b[0m')
+    }
+
     this.initEnvAndSecrets()
   }
 
@@ -42,7 +48,8 @@ export class VectrRuntime {
       if (ref.type === 'env') {
         val = process.env[ref.name!] || ''
       } else if (ref.type === 'file') {
-        const p = this.resolvePath(ref.path!, this.cwd)
+        const mockCtx: ExecutionContext = { cwd: this.cwd, variables: new Map(), prefix: '', varPrefix: '' }
+        const p = this.resolvePath(ref.path!, mockCtx)
         if (fs.existsSync(p)) {
           val = fs.readFileSync(p, 'utf-8').trim()
         } else {
@@ -82,6 +89,17 @@ export class VectrRuntime {
 
       return match
     })
+  }
+
+  private isDangerousCommand(cmd: Command): boolean {
+    if (cmd.type === 'run') {
+      const c = cmd.command.toLowerCase()
+      if (/\brm\s+-r[f]?\s+\/($|\s|\*)/.test(c)) return true
+      if (/\brm\s+-r[f]?\s+~\/($|\s|\*)/.test(c)) return true
+      if (/\bmkfs\b/.test(c)) return true
+      if (/>\s*\/dev\/sd[a-z]/.test(c)) return true
+    }
+    return false
   }
 
   private debugFlag(name: keyof NonNullable<NonNullable<VectrConfig['showDebug']>['extra']>): boolean {
@@ -358,8 +376,49 @@ export class VectrRuntime {
 
   private async executeCommand(cmd: Command, stepName: string, showOutput: boolean, ctx: ExecutionContext) {
     switch (cmd.type) {
+      case 'print': {
+        const msg = this.interpolate(cmd.message, ctx.variables)
+
+        if (showOutput) {
+          console.log(`\x1b[36m[Vectr]\x1b[0m ${ctx.prefix}${msg}`)
+        }
+        break
+      }
+      case 'leave': {
+        const leaveCtx = { ...ctx, ignoreSafeRuntime: true }
+        for (const innerCmd of cmd.commands) {
+          if (!this.config?.disableLeaveSafeguard && this.isDangerousCommand(innerCmd)) {
+            if (cmd.onBlock) {
+              if (typeof cmd.onBlock === 'string') {
+                if (showOutput) console.log(`\x1b[31m[Vectr Blocked]\x1b[0m ${ctx.prefix}${cmd.onBlock}`)
+              } else {
+                for (const blockCmd of cmd.onBlock) {
+                  await this.executeCommand(blockCmd, stepName, showOutput, ctx)
+                }
+              }
+            } else {
+              throw new VectrError(`Leave command blocked by safeguard. Dangerous code detected: ${(innerCmd as any).command}`)
+            }
+            continue
+          }
+
+          try {
+            await this.executeCommand(innerCmd, stepName, showOutput, leaveCtx)
+          } catch (e: any) {
+            if (cmd.onError) {
+              if (showOutput) console.log(`\x1b[33m[Vectr] ${ctx.prefix}Leave command failed. Running onError fallback...\x1b[0m`)
+              for (const errCmd of cmd.onError) {
+                await this.executeCommand(errCmd, stepName, showOutput, ctx)
+              }
+            } else {
+              throw e
+            }
+          }
+        }
+        break
+      }
       case 'cd': {
-        const target = this.resolvePath(this.interpolate(cmd.path, ctx.variables), ctx.cwd)
+        const target = this.resolvePath(this.interpolate(cmd.path, ctx.variables), ctx)
         if (showOutput) {
           console.log(`\x1b[90m  ${ctx.prefix}↳ cd ${target}\x1b[0m`)
         }
@@ -424,8 +483,9 @@ export class VectrRuntime {
         break
       }
       case 'cp': {
-        const src = this.resolvePath(this.interpolate(cmd.src, ctx.variables), ctx.cwd)
-        const dest = this.resolvePath(this.interpolate(cmd.dest, ctx.variables), ctx.cwd)
+
+        const src = this.resolvePath(this.interpolate(cmd.src, ctx.variables), ctx)
+        const dest = this.resolvePath(this.interpolate(cmd.dest, ctx.variables), ctx)
 
         if (showOutput) {
           console.log(`\x1b[90m  ${ctx.prefix}↳ cp ${src} => ${dest}\x1b[0m`)
@@ -504,15 +564,15 @@ export class VectrRuntime {
     }
   }
 
-  private resolvePath(p: string, cwd: string): string {
+  private resolvePath(p: string, ctx: ExecutionContext): string {
 
     if (p.startsWith('~/')) {
       p = path.join(process.env.HOME || process.env.USERPROFILE || '', p.slice(2))
     }
 
-    const resolved = path.resolve(cwd, p)
+    const resolved = path.resolve(ctx.cwd, p)
 
-    if (this.config?.enableSafeRuntime?.enabled) {
+    if (this.config?.enableSafeRuntime?.enabled && !ctx.ignoreSafeRuntime) {
 
       const workspaceRoot = process.cwd()
 

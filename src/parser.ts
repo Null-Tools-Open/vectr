@@ -220,6 +220,74 @@ export function parse(input: string, config?: VectrConfig): Script {
         } else {
           throw new VectrSyntaxError(`Invalid run syntax at line ${i + 1}: ${rawLine}`)
         }
+      } else if (line.startsWith('print ')) {
+        const match = line.match(/^print\s+['"](.*?)['"]$/)
+        if (match) {
+          targetCommands.push({ type: 'print', message: match[1] })
+        } else {
+          throw new VectrSyntaxError(`Invalid print syntax at line ${i + 1}: ${rawLine}`)
+        }
+      } else if (line.startsWith('leave ')) {
+
+        let restLine = line.substring(6).trim()
+
+        let onBlockStr: string | undefined = undefined
+        let onErrorCmds: import('./types').Command[] | undefined = undefined
+
+        const onBlockMatch = restLine.match(/\s+onBlock\s+['"](.*?)['"]/)
+
+        if (onBlockMatch) {
+          onBlockStr = onBlockMatch[1]
+          restLine = restLine.replace(onBlockMatch[0], '').trim()
+        }
+
+        const onErrorMatch = restLine.match(/\s+onError\s+(run\s+.*|cd\s+.*|cp\s+.*|print\s+.*)$/)
+
+        if (onErrorMatch) {
+
+          const errLine = onErrorMatch[1].trim()
+
+          restLine = restLine.replace(onErrorMatch[0], '').trim()
+
+          let errCmd: import('./types').Command | null = null
+          if (errLine.startsWith('print ')) {
+            const m = errLine.match(/^print\s+['"](.*?)['"]$/)
+            if (m) errCmd = { type: 'print', message: m[1] }
+          } else if (errLine.startsWith('run ')) {
+            const m = errLine.match(/^run\s+['"](.*?)['"](?:\s+(ignore_error))?$/)
+            if (m) errCmd = { type: 'run', command: m[1], ignoreError: m[2] === 'ignore_error' }
+          }
+          if (errCmd) onErrorCmds = [errCmd]
+        }
+
+        let innerCmd: import('./types').Command | null = null
+        if (restLine.startsWith('run ')) {
+          const matchRun = restLine.match(/^run\s+['"](.*?)['"](?:\s+(ignore_error))?$/)
+          if (matchRun) {
+            innerCmd = { type: 'run', command: matchRun[1], ignoreError: matchRun[2] === 'ignore_error' }
+          }
+        } else if (restLine.startsWith('cd ')) {
+          const path = restLine.substring(3).trim().replace(/^['"](.*)['"]$/, '$1')
+          innerCmd = { type: 'cd', path }
+        } else if (restLine.startsWith('cp ')) {
+          const matchCp = restLine.match(/^cp\s+(.+?)\s*=>\s*(.+)$/)
+          if (matchCp) {
+            const src = matchCp[1].trim().replace(/^['"](.*)['"]$/, '$1')
+            const dest = matchCp[2].trim().replace(/^['"](.*)['"]$/, '$1')
+            innerCmd = { type: 'cp', src, dest }
+          }
+        }
+
+        if (innerCmd) {
+          targetCommands.push({
+            type: 'leave',
+            commands: [innerCmd],
+            onBlock: onBlockStr,
+            onError: onErrorCmds
+          })
+        } else {
+          throw new VectrSyntaxError(`Invalid command inside 'leave' at line ${i + 1}: ${rawLine}`)
+        }
       } else {
         throw new VectrSyntaxError(`Unknown command at line ${i + 1}: ${rawLine}`)
       }
