@@ -1,0 +1,7 @@
+/devtests
+/dist
+/node_modules
+/packages
+/vectr.config.mjs
+/codeExamples
+/examples
